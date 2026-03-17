@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="entra-auth",
+    name="entra_auth",
     version="1.0.0",
     description="Django app for Microsoft Entra ID (Azure AD) authentication via MSAL",
     packages=find_packages(),
