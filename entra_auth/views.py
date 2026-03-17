@@ -32,7 +32,10 @@ log = logging.getLogger(__name__)
 def _build_redirect_uri(request: HttpRequest) -> str:
     if entra_settings.REDIRECT_URI:
         return str(entra_settings.REDIRECT_URI)
-    return str(request.build_absolute_uri("/entra/callback/"))
+    uri = str(request.build_absolute_uri("/entra/callback/"))
+    import logging
+    logging.getLogger(__name__).warning("DEBUG redirect_uri: %s", uri)
+    return uri
 
 
 def _get_next(request: HttpRequest) -> str:
