@@ -5,10 +5,10 @@ Django system checks that validate the ENTRA_AUTH configuration at startup.
 Run explicitly with:  python manage.py check
 """
 
-from django.core.checks import Error, Warning, register
+from django.core.checks import Error, Warning, Tags, register
 
 
-@register.check(deploy=False)
+@register(Tags.security)
 def check_entra_settings(app_configs, **kwargs):
     from django.conf import settings
 
