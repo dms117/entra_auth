@@ -5,6 +5,7 @@ setup(
     version="1.0.0",
     description="Django app for Microsoft Entra ID (Azure AD) authentication via MSAL",
     packages=find_packages(),
+    package_dir={"": "."},
     python_requires=">=3.10",
     install_requires=[
         "msal>=1.29.0",
