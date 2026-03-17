@@ -82,7 +82,7 @@ def initiate_auth_code_flow(request, *, redirect_uri: str) -> dict:
     app = build_msal_app(request)
     flow = app.initiate_auth_code_flow(
         scopes=entra_settings.SCOPES,
-        redirect_uri=redirect_uri,
+        redirect_uri=str(redirect_uri),
     )
     request.session["_entra_auth_flow"] = flow
     return flow

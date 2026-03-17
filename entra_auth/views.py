@@ -30,10 +30,9 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def _build_redirect_uri(request: HttpRequest) -> str:
-    """Return the absolute callback URL to register with MSAL."""
     if entra_settings.REDIRECT_URI:
-        return entra_settings.REDIRECT_URI
-    return request.build_absolute_uri("/entra/callback/")
+        return str(entra_settings.REDIRECT_URI)
+    return str(request.build_absolute_uri("/entra/callback/"))
 
 
 def _get_next(request: HttpRequest) -> str:
