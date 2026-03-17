@@ -1,20 +1,30 @@
 """
 entra_auth.backends
 ~~~~~~~~~~~~~~~~~~~
-Custom Django authentication backend.
+Custom Django authentication backend tailored for LEO's User model,
+which extends models.Model directly rather than AbstractUser.
+
+LEO's User has:
+  - username, first_name, last_name, email  (standard fields)
+  - groups (ManyToMany to django.contrib.auth.models.Group)
+  - is_active, is_staff, is_superuser       (permission flags)
+  - last_login                               (DateTimeField)
+  - No set_unusable_password / set_password  (stubs that return False)
+  - is_authenticated is a @property          (always returns True)
 
 Add to settings.AUTHENTICATION_BACKENDS:
 
     AUTHENTICATION_BACKENDS = [
         "entra_auth.backends.EntraAuthBackend",
-        "django.contrib.auth.backends.ModelBackend",  # keep for admin login
     ]
 """
 
 import logging
+from datetime import timezone
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
+from django.utils import timezone as django_timezone
 
 from .conf import entra_settings
 from .graph import GraphError, get_me, get_me_groups
@@ -66,8 +76,8 @@ class EntraAuthBackend:
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _get_or_create_user(self, access_token: str, claims: dict) -> User | None:
-        """Resolve (and optionally create) the Django user for this token."""
+    def _get_or_create_user(self, access_token: str, claims: dict):
+        """Resolve (and optionally create) the LEO User for this token."""
 
         # --- Determine username ---
         if entra_settings.USERNAME_FIELD == "oid":
@@ -83,6 +93,10 @@ class EntraAuthBackend:
             log.error("Cannot determine username from token claims: %s", claims)
             return None
 
+        # Entra returns email-style usernames — LEO may store just the local
+        # part (before @) or the full UPN. Try full UPN first, then local part.
+        user = self._find_user(username)
+
         # --- Fetch richer profile from Graph ---
         try:
             graph_profile = get_me(
@@ -95,9 +109,7 @@ class EntraAuthBackend:
 
         # --- Get or create user ---
         created = False
-        try:
-            user = User.objects.get(username=username)
-        except User.DoesNotExist:
+        if user is None:
             if not entra_settings.CREATE_USERS:
                 log.info("User %r not found and CREATE_USERS=False", username)
                 return None
@@ -110,13 +122,56 @@ class EntraAuthBackend:
             if created:
                 log.info("Created new Entra user: %s", username)
 
+        # --- Update last_login ---
+        # Django's auth.login() normally does this but only for AbstractBaseUser.
+        # LEO's User has last_login so we update it manually.
+        User.objects.filter(pk=user.pk).update(last_login=django_timezone.now())
+
         # --- Group sync ---
         self._sync_groups(user, access_token, claims)
 
         return user
 
-    def _populate_user(self, user: User, claims: dict, graph_profile: dict) -> None:
-        """Copy Graph/token attributes onto the Django user model."""
+    def _find_user(self, username: str):
+        """
+        Try to find an existing LEO user using three strategies in priority order:
+ 
+        1. Local part matched against username  (abc123       → username=abc123)
+        2. Full UPN matched against username    (abc123@x.edu → username=abc123@x.edu)
+        3. Full UPN matched against email       (abc123@x.edu → email=abc123@x.edu)
+ 
+        This order ensures older short-username records are found first, while
+        still handling newer full-UPN records and email-based lookups as fallbacks.
+        """
+        local = username.split("@")[0] if "@" in username else username
+ 
+        # 1. Local part → username (handles legacy short-username records)
+        try:
+            return User.objects.get(username=local)
+        except User.DoesNotExist:
+            pass
+ 
+        # 2. Full UPN → username (handles users created by django-microsoft-auth)
+        if "@" in username:
+            try:
+                return User.objects.get(username=username)
+            except User.DoesNotExist:
+                pass
+ 
+        # 3. Full UPN → email (last resort fallback)
+        if "@" in username:
+            try:
+                return User.objects.get(email=username)
+            except User.DoesNotExist:
+                pass
+ 
+        return None
+
+    def _populate_user(self, user, claims: dict, graph_profile: dict) -> None:
+        """
+        Copy Graph / token attributes onto the LEO User.
+        Only sets fields that actually exist on the model.
+        """
         email = (
             graph_profile.get("mail")
             or graph_profile.get("userPrincipalName")
@@ -124,37 +179,35 @@ class EntraAuthBackend:
             or claims.get("preferred_username")
             or ""
         )
+
+        # These fields all exist on LEO's User model
         user.email = email
+        user.first_name = graph_profile.get("givenName") or user.first_name or ""
+        user.last_name = graph_profile.get("surname") or user.last_name or ""
 
-        # Standard AbstractUser fields — safe to set even if custom User
-        # models don't expose them; worst case is a harmless AttributeError
-        _setattr_safe(user, "first_name", graph_profile.get("givenName", ""))
-        _setattr_safe(user, "last_name", graph_profile.get("surname", ""))
+        # Ensure the account is active on login
+        # (don't override if an admin has explicitly deactivated it)
+        if not user.pk:
+            # Only set default for new users
+            user.is_active = True
 
-        # Mark the password unusable so nobody can log in via password
-        user.set_unusable_password()
-
-        # Preserve any extra Graph data in a custom field if the model has it
-        if hasattr(user, "entra_oid"):
-            user.entra_oid = claims.get("oid", "")
-        if hasattr(user, "entra_display_name"):
-            user.entra_display_name = graph_profile.get("displayName", "")
-
-    def _sync_groups(self, user: User, access_token: str, claims: dict) -> None:
-        """Map Entra group memberships to Django groups according to GROUPS_MAP."""
+    def _sync_groups(self, user, access_token: str, claims: dict) -> None:
+        """Map Entra group memberships to LEO Django groups via GROUPS_MAP."""
         groups_map: dict = entra_settings.GROUPS_MAP
         if not groups_map:
             return
 
-        # Try token claims first (requires optional-claims config in Entra)
+        # Try token claims first
         entra_group_ids: list[str] = claims.get(entra_settings.GROUPS_CLAIM, [])
 
-        # If not in claims (common when group count > 200), fall back to Graph
+        # Fall back to Graph if not in claims (happens when user is in 200+ groups)
         if not entra_group_ids:
             try:
                 raw = get_me_groups(access_token)
                 entra_group_ids = [
-                    g.get("id", "") for g in raw if g.get("@odata.type") == "#microsoft.graph.group"
+                    g.get("id", "")
+                    for g in raw
+                    if g.get("@odata.type") == "#microsoft.graph.group"
                 ]
             except GraphError:
                 log.warning("Could not fetch group memberships from Graph")
@@ -178,16 +231,3 @@ class EntraAuthBackend:
 
         if to_remove:
             user.groups.remove(*Group.objects.filter(name__in=to_remove))
-
-
-# ---------------------------------------------------------------------------
-# Utility
-# ---------------------------------------------------------------------------
-
-def _setattr_safe(obj, attr: str, value) -> None:
-    """Set attribute only if the model exposes it (compatible with custom User models)."""
-    try:
-        if hasattr(obj.__class__, attr):
-            setattr(obj, attr, value)
-    except Exception:
-        pass
