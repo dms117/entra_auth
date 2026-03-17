@@ -81,6 +81,7 @@ _DEFAULTS = {
     "GROUPS_MAP": {},
     "TOKEN_CACHE_TIMEOUT": 3600,
     "EXEMPT_URLS": [],
+    "POST_LOGIN_REDIRECT": None,
 }
 
 _REQUIRED = {"CLIENT_ID", "TENANT_ID"}

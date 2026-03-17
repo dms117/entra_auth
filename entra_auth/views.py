@@ -126,9 +126,15 @@ class EntraCallbackView(View):
 
         auth.login(request, user, backend="entra_auth.backends.EntraAuthBackend")
         log.info("User %s authenticated via Entra ID", user.username)
-        next_url = request.session.pop("_entra_next", None) or settings.LOGIN_REDIRECT_URL
+
         request.session.save()
 
+        # Call post-login hook if configured
+        hook_response = _call_post_login_hook(request, user)
+        if hook_response is not None:
+            return hook_response
+
+        next_url = request.session.pop("_entra_next", None) or settings.LOGIN_REDIRECT_URL
         return redirect(next_url)
 
 
@@ -157,6 +163,36 @@ class EntraLogoutView(View):
         )
         return HttpResponseRedirect(entra_logout_url)
 
+
+def _call_post_login_hook(request, user):
+    """
+    Call the POST_LOGIN_REDIRECT hook function if configured in ENTRA_AUTH.
+
+    The hook signature is:
+        fn(request, user) -> HttpResponse | None
+
+    Return an HttpResponse to override the default redirect entirely,
+    or return None to proceed with the normal LOGIN_REDIRECT_URL redirect.
+
+    Example in LEO's settings.py:
+        ENTRA_AUTH = {
+            ...
+            "POST_LOGIN_REDIRECT": "NEMO.views.auth.post_login_redirect",
+        }
+    """
+    hook_path = entra_settings.POST_LOGIN_REDIRECT
+    if not hook_path:
+        return None
+
+    try:
+        module_path, func_name = hook_path.rsplit(".", 1)
+        import importlib
+        module = importlib.import_module(module_path)
+        hook_fn = getattr(module, func_name)
+        return hook_fn(request, user)
+    except Exception:
+        log.exception("Error calling POST_LOGIN_REDIRECT hook: %s", hook_path)
+        return None
 
 # ---------------------------------------------------------------------------
 # Deferred import (settings may not be ready at module load time)
