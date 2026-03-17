@@ -75,34 +75,25 @@ def build_msal_app(
 # ---------------------------------------------------------------------------
 
 def initiate_auth_code_flow(request, *, redirect_uri: str) -> dict:
-    """
-    Start an auth-code + PKCE flow.  Stores the flow state in the session and
-    returns the dict returned by MSAL (contains ``auth_uri``).
-    """
     app = build_msal_app(request)
     flow = app.initiate_auth_code_flow(
-        scopes=entra_settings.SCOPES,
+        scopes=[str(s) for s in entra_settings.SCOPES],
         redirect_uri=str(redirect_uri),
     )
     request.session["_entra_auth_flow"] = flow
+    request.session.save()  # force save immediately
+    log.warning("DEBUG initiate: session key=%s flow keys=%s", request.session.session_key, list(flow.keys()))
     return flow
 
 
 def acquire_token_by_auth_code_flow(request, *, auth_response: dict) -> dict:
-    """
-    Complete the auth-code flow.  Returns the MSAL result dict which contains
-    ``access_token``, ``id_token_claims``, etc. on success, or ``error`` on
-    failure.
-
-    The token cache is automatically persisted back to the session.
-    """
+    flow = request.session.get("_entra_auth_flow", {})
+    log.warning("DEBUG callback: session key=%s flow found=%s", request.session.session_key, bool(flow))
     app = build_msal_app(request)
-    flow = request.session.pop("_entra_auth_flow", {})
     result = app.acquire_token_by_auth_code_flow(
         auth_code_flow=flow,
         auth_response=auth_response,
     )
-    # Persist updated cache (new tokens, refreshed tokens, etc.)
     _save_cache(request, app.token_cache)
     return result
 
