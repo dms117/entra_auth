@@ -126,8 +126,9 @@ class EntraCallbackView(View):
 
         auth.login(request, user, backend="entra_auth.backends.EntraAuthBackend")
         log.info("User %s authenticated via Entra ID", user.username)
-
         next_url = request.session.pop("_entra_next", None) or settings.LOGIN_REDIRECT_URL
+        request.session.save()
+
         return redirect(next_url)
 
 
