@@ -5,7 +5,7 @@ Thin wrappers around msal.ConfidentialClientApplication /
 msal.PublicClientApplication that persist the MSAL token cache inside the
 Django session so tokens survive between requests without an external cache.
 """
-
+import logging
 import msal
 
 from .conf import entra_settings
@@ -16,6 +16,8 @@ from .conf import entra_settings
 # ---------------------------------------------------------------------------
 
 _CACHE_SESSION_KEY = "_entra_token_cache"
+
+log = logging.getLogger(__name__)
 
 
 def _load_cache(request) -> msal.SerializableTokenCache:
