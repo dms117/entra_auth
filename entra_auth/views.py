@@ -13,6 +13,7 @@ import logging
 from django.contrib import auth, messages
 from django.http import HttpRequest, HttpResponse, HttpResponseRedirect
 from django.shortcuts import redirect
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views import View
 
 from .conf import entra_settings
@@ -30,22 +31,34 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def _build_redirect_uri(request: HttpRequest) -> str:
+    """Return the absolute callback URL to register with MSAL."""
     if entra_settings.REDIRECT_URI:
         return str(entra_settings.REDIRECT_URI)
-    uri = str(request.build_absolute_uri("/entra/callback/"))
-    import logging
-    logging.getLogger(__name__).warning("DEBUG redirect_uri: %s", uri)
-    return uri
+    return str(request.build_absolute_uri("/entra/callback/"))
 
 
-def _get_next(request: HttpRequest) -> str:
+def _safe_next_url(request: HttpRequest, fallback: str) -> str:
+    """
+    Return the ``next`` URL from POST/GET/session only if it is safe to
+    redirect to (same host, allowed scheme).  Falls back to *fallback* if
+    the value is missing or fails the safety check.
+
+    This prevents open-redirect attacks where an attacker crafts a login
+    link whose ``next`` parameter points to an external phishing site.
+    """
     next_url = (
         request.POST.get("next")
         or request.GET.get("next")
         or request.session.get("_entra_next")
-        or settings.LOGIN_REDIRECT_URL
+        or ""
     )
-    return next_url
+    if next_url and url_has_allowed_host_and_scheme(
+        url=next_url,
+        allowed_hosts=request.get_host(),
+        require_https=request.is_secure(),
+    ):
+        return next_url
+    return fallback
 
 
 # ---------------------------------------------------------------------------
@@ -62,11 +75,15 @@ class EntraLoginView(View):
 
     def get(self, request: HttpRequest) -> HttpResponse:
         if request.user.is_authenticated:
-            return redirect(_get_next(request))
+            return redirect(_safe_next_url(request, settings.LOGIN_REDIRECT_URL))
 
-        # Persist the post-login redirect target
+        # Persist the post-login redirect target only if it is safe
         next_url = request.GET.get("next", "")
-        if next_url:
+        if next_url and url_has_allowed_host_and_scheme(
+            url=next_url,
+            allowed_hosts=request.get_host(),
+            require_https=request.is_secure(),
+        ):
             request.session["_entra_next"] = next_url
 
         redirect_uri = _build_redirect_uri(request)
@@ -134,14 +151,16 @@ class EntraCallbackView(View):
         if hook_response is not None:
             return hook_response
 
-        next_url = request.session.pop("_entra_next", None) or settings.LOGIN_REDIRECT_URL
+        next_url = _safe_next_url(request, settings.LOGIN_REDIRECT_URL)
+        # Clear the stored next URL now that we've consumed it
+        request.session.pop("_entra_next", None)
         return redirect(next_url)
 
 
 class EntraLogoutView(View):
     """
-    Log the user out of Django and optionally redirect to Microsoft's global
-    sign-out endpoint so the Entra session is also terminated.
+    Log the user out of Django and redirect to Microsoft's global sign-out
+    endpoint so the Entra session is also terminated.
     """
 
     def get(self, request: HttpRequest) -> HttpResponse:
@@ -164,6 +183,10 @@ class EntraLogoutView(View):
         return HttpResponseRedirect(entra_logout_url)
 
 
+# ---------------------------------------------------------------------------
+# Post-login hook
+# ---------------------------------------------------------------------------
+
 def _call_post_login_hook(request, user):
     """
     Call the POST_LOGIN_REDIRECT hook function if configured in ENTRA_AUTH.
@@ -174,10 +197,10 @@ def _call_post_login_hook(request, user):
     Return an HttpResponse to override the default redirect entirely,
     or return None to proceed with the normal LOGIN_REDIRECT_URL redirect.
 
-    Example in LEO's settings.py:
+    Example in settings.py:
         ENTRA_AUTH = {
             ...
-            "POST_LOGIN_REDIRECT": "NEMO.views.auth.post_login_redirect",
+            "POST_LOGIN_REDIRECT": "myapp.views.auth.post_login_redirect",
         }
     """
     hook_path = entra_settings.POST_LOGIN_REDIRECT
@@ -193,6 +216,7 @@ def _call_post_login_hook(request, user):
     except Exception:
         log.exception("Error calling POST_LOGIN_REDIRECT hook: %s", hook_path)
         return None
+
 
 # ---------------------------------------------------------------------------
 # Deferred import (settings may not be ready at module load time)

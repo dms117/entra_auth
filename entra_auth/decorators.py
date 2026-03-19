@@ -21,12 +21,31 @@ View decorators for fine-grained access control.
 
 import functools
 
-from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
 from django.shortcuts import redirect
-from django.utils.decorators import method_decorator
+from django.utils.http import url_has_allowed_host_and_scheme
 
 from .conf import entra_settings
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _safe_redirect_to_login(request, redirect_field_name="next"):
+    """
+    Redirect to the Entra login page, appending ?next= only if the current
+    URL passes the same-host safety check.
+    """
+    login_url = entra_settings.LOGIN_URL
+    next_url = request.get_full_path()
+    if url_has_allowed_host_and_scheme(
+        url=next_url,
+        allowed_hosts=request.get_host(),
+        require_https=request.is_secure(),
+    ):
+        return redirect(f"{login_url}?{redirect_field_name}={next_url}")
+    return redirect(login_url)
 
 
 # ---------------------------------------------------------------------------
@@ -36,16 +55,16 @@ from .conf import entra_settings
 def entra_login_required(view_func=None, *, redirect_field_name="next"):
     """
     Decorator that requires the user to be authenticated via Entra ID.
-    Redirects to the Entra login page (not Django's default login) on failure.
+    Redirects to the Entra login page on failure.
+    The ``next`` parameter is validated against the current host to prevent
+    open redirect attacks.
     """
     def decorator(func):
         @functools.wraps(func)
         def wrapper(request, *args, **kwargs):
             if request.user.is_authenticated:
                 return func(request, *args, **kwargs)
-            login_url = entra_settings.LOGIN_URL
-            next_url = request.get_full_path()
-            return redirect(f"{login_url}?{redirect_field_name}={next_url}")
+            return _safe_redirect_to_login(request, redirect_field_name)
         return wrapper
 
     if view_func is not None:
@@ -77,9 +96,7 @@ def entra_group_required(*group_names: str, raise_exception: bool = False):
             if not request.user.is_authenticated:
                 if raise_exception:
                     raise PermissionDenied
-                return redirect(
-                    f"{entra_settings.LOGIN_URL}?next={request.get_full_path()}"
-                )
+                return _safe_redirect_to_login(request)
             user_groups = set(
                 request.user.groups.values_list("name", flat=True)
             )

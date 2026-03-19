@@ -26,6 +26,7 @@ import re
 
 from django.conf import settings
 from django.shortcuts import redirect
+from django.utils.http import url_has_allowed_host_and_scheme
 
 from .conf import entra_settings
 
@@ -50,7 +51,15 @@ class EntraLoginRequiredMiddleware:
     def __call__(self, request):
         if not self._is_exempt(request) and not request.user.is_authenticated:
             login_url = entra_settings.LOGIN_URL
-            return redirect(f"{login_url}?next={request.get_full_path()}")
+            # Only include ?next= if the current path is safe to redirect back to
+            next_path = request.get_full_path()
+            if url_has_allowed_host_and_scheme(
+                url=next_path,
+                allowed_hosts=request.get_host(),
+                require_https=request.is_secure(),
+            ):
+                return redirect(f"{login_url}?next={next_path}")
+            return redirect(login_url)
         return self.get_response(request)
 
     def _is_exempt(self, request) -> bool:
