@@ -152,7 +152,7 @@ class EntraAuthBackend:
         from django.contrib.auth.base_user import AbstractBaseUser
     
         local = username.split("@")[0] if "@" in username else username
-        is_standard = isinstance(User(), AbstractBaseUser)
+        is_standard = issubclass(User, AbstractBaseUser)
     
         if is_standard:
             # Standard Django User — usernames are typically stored exactly as
