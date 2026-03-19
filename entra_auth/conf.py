@@ -24,7 +24,7 @@ Settings are read from a single dict in your Django settings:
         # Override the full authority URL. If None, built from TENANT_ID.
 
         "LOGOUT_REDIRECT_URL": "/",
-        # Where to send the user after logout
+        # Where to send the user after logout. Must be on the same host.
 
         "GRAPH_USER_FIELDS": ["id", "displayName", "mail", "userPrincipalName",
                               "givenName", "surname", "jobTitle", "officeLocation"],
@@ -52,6 +52,13 @@ Settings are read from a single dict in your Django settings:
         "EXEMPT_URLS": [],
         # Extra URL patterns exempt from the require-login middleware
         # (login/callback/logout URLs are always exempt automatically)
+
+        "POST_LOGIN_REDIRECT": None,
+        # Dotted path to a function called after successful login.
+        # Signature: fn(request, user) -> HttpResponse | None
+        # Return an HttpResponse to override the default redirect, or None to
+        # proceed with the normal LOGIN_REDIRECT_URL redirect.
+        # Example: "myapp.views.auth.post_login_redirect"
     }
 """
 

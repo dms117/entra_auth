@@ -35,7 +35,7 @@ from .conf import entra_settings
 def _safe_redirect_to_login(request, redirect_field_name="next"):
     """
     Redirect to the Entra login page, appending ?next= only if the current
-    URL passes the same-host safety check.
+    URL passes the same-host safety check to prevent open-redirect attacks.
     """
     login_url = entra_settings.LOGIN_URL
     next_url = request.get_full_path()
@@ -56,8 +56,17 @@ def entra_login_required(view_func=None, *, redirect_field_name="next"):
     """
     Decorator that requires the user to be authenticated via Entra ID.
     Redirects to the Entra login page on failure.
+
     The ``next`` parameter is validated against the current host to prevent
-    open redirect attacks.
+    open-redirect attacks.
+
+    Usage:
+        @entra_login_required
+        def my_view(request): ...
+
+        # Class-based views
+        @method_decorator(entra_login_required, name="dispatch")
+        class MyView(View): ...
     """
     def decorator(func):
         @functools.wraps(func)

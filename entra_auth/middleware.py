@@ -24,7 +24,6 @@ Exempted URLs:
 
 import re
 
-from django.conf import settings
 from django.shortcuts import redirect
 from django.utils.http import url_has_allowed_host_and_scheme
 
@@ -51,7 +50,8 @@ class EntraLoginRequiredMiddleware:
     def __call__(self, request):
         if not self._is_exempt(request) and not request.user.is_authenticated:
             login_url = entra_settings.LOGIN_URL
-            # Only include ?next= if the current path is safe to redirect back to
+            # Validate the current path before appending it as ?next= to
+            # prevent open-redirect attacks via manipulated request paths.
             next_path = request.get_full_path()
             if url_has_allowed_host_and_scheme(
                 url=next_path,

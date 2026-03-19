@@ -9,6 +9,7 @@ Three views cover the entire OAuth2 / OIDC flow:
 """
 
 import logging
+from urllib.parse import urlencode
 
 from django.contrib import auth, messages
 from django.http import HttpRequest, HttpResponse, HttpResponseRedirect
@@ -61,6 +62,26 @@ def _safe_next_url(request: HttpRequest, fallback: str) -> str:
     return fallback
 
 
+def _safe_logout_redirect_uri(request: HttpRequest) -> str:
+    """
+    Build the absolute post-logout redirect URI, validating that the
+    configured LOGOUT_REDIRECT_URL is on the same host.  Falls back to
+    the site root if misconfigured.
+    """
+    post_logout_path = entra_settings.LOGOUT_REDIRECT_URL
+    if not url_has_allowed_host_and_scheme(
+        url=post_logout_path,
+        allowed_hosts=request.get_host(),
+        require_https=request.is_secure(),
+    ):
+        log.warning(
+            "LOGOUT_REDIRECT_URL %r failed host safety check; falling back to /",
+            post_logout_path,
+        )
+        post_logout_path = "/"
+    return request.build_absolute_uri(post_logout_path)
+
+
 # ---------------------------------------------------------------------------
 # Views
 # ---------------------------------------------------------------------------
@@ -71,13 +92,15 @@ class EntraLoginView(View):
 
     Accepts an optional ``next`` GET parameter (stored in session) so the user
     lands on the page they originally requested after authentication.
+    The ``next`` value is validated against the current host to prevent
+    open-redirect attacks before being stored in the session.
     """
 
     def get(self, request: HttpRequest) -> HttpResponse:
         if request.user.is_authenticated:
             return redirect(_safe_next_url(request, settings.LOGIN_REDIRECT_URL))
 
-        # Persist the post-login redirect target only if it is safe
+        # Only persist the next URL if it passes the host safety check
         next_url = request.GET.get("next", "")
         if next_url and url_has_allowed_host_and_scheme(
             url=next_url,
@@ -108,10 +131,9 @@ class EntraCallbackView(View):
             error = request.GET.get("error")
             description = request.GET.get("error_description", "")
             log.warning("Entra auth error: %s — %s", error, description)
-            messages.error(
-                request,
-                f"Sign-in failed: {description or error}",
-            )
+            # Log the detail but show a generic message to the user to avoid
+            # leaking internal tenant configuration information
+            messages.error(request, "Sign-in failed. Please try again.")
             return redirect(entra_settings.LOGIN_URL)
 
         try:
@@ -125,15 +147,13 @@ class EntraCallbackView(View):
             return redirect(entra_settings.LOGIN_URL)
 
         if "error" in msal_result:
+            # Log full detail privately, show generic message publicly
             log.warning(
                 "Token acquisition error: %s — %s",
                 msal_result.get("error"),
                 msal_result.get("error_description", ""),
             )
-            messages.error(
-                request,
-                msal_result.get("error_description", "Sign-in failed."),
-            )
+            messages.error(request, "Sign-in failed. Please try again.")
             return redirect(entra_settings.LOGIN_URL)
 
         user = auth.authenticate(request, msal_result=msal_result)
@@ -142,8 +162,16 @@ class EntraCallbackView(View):
             return redirect(entra_settings.LOGIN_URL)
 
         auth.login(request, user, backend="entra_auth.backends.EntraAuthBackend")
+
+        # Rotate the session key after login to prevent session fixation attacks,
+        # where an attacker pre-sets a known session cookie and hijacks it after
+        # the victim authenticates.
+        request.session.cycle_key()
+
         log.info("User %s authenticated via Entra ID", user.username)
 
+        # Explicitly save the session before redirecting so the next request
+        # sees the authenticated user immediately
         request.session.save()
 
         # Call post-login hook if configured
@@ -152,7 +180,7 @@ class EntraCallbackView(View):
             return hook_response
 
         next_url = _safe_next_url(request, settings.LOGIN_REDIRECT_URL)
-        # Clear the stored next URL now that we've consumed it
+        # Clear the stored next URL now that we have consumed it
         request.session.pop("_entra_next", None)
         return redirect(next_url)
 
@@ -173,13 +201,11 @@ class EntraLogoutView(View):
         _clear_cache(request)
         auth.logout(request)
 
-        post_logout_uri = request.build_absolute_uri(
-            entra_settings.LOGOUT_REDIRECT_URL
-        )
-        entra_logout_url = (
-            f"{entra_settings.AUTHORITY_URL}/oauth2/v2.0/logout"
-            f"?post_logout_redirect_uri={post_logout_uri}"
-        )
+        # Build and URL-encode the post-logout redirect so special characters
+        # in the URI don't corrupt the Entra logout endpoint query string
+        post_logout_uri = _safe_logout_redirect_uri(request)
+        params = urlencode({"post_logout_redirect_uri": post_logout_uri})
+        entra_logout_url = f"{entra_settings.AUTHORITY_URL}/oauth2/v2.0/logout?{params}"
         return HttpResponseRedirect(entra_logout_url)
 
 
