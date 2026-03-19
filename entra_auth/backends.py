@@ -134,37 +134,67 @@ class EntraAuthBackend:
 
     def _find_user(self, username: str):
         """
-        Try to find an existing LEO user using three strategies in priority order:
- 
-        1. Local part matched against username  (abc123       → username=abc123)
-        2. Full UPN matched against username    (abc123@x.edu → username=abc123@x.edu)
-        3. Full UPN matched against email       (abc123@x.edu → email=abc123@x.edu)
- 
-        This order ensures older short-username records are found first, while
-        still handling newer full-UPN records and email-based lookups as fallbacks.
+        Try to find an existing user, adapting the lookup strategy to the
+        User model's base class:
+    
+        AbstractUser / AbstractBaseUser (standard Django):
+            1. Full UPN → username  (exact match, most common case)
+            2. Full UPN → email     (fallback)
+    
+        Plain models.Model (custom, e.g. LEO):
+            1. Local part → username  (legacy short-username records)
+            2. Full UPN  → username   (full UPN records)
+            3. Full UPN  → email      (last resort)
+    
+        The models.Model strategy is more expansive because custom user models
+        often have a mixed-format username history from previous auth systems.
         """
+        from django.contrib.auth.base_user import AbstractBaseUser
+    
         local = username.split("@")[0] if "@" in username else username
- 
-        # 1. Local part → username (handles legacy short-username records)
-        try:
-            return User.objects.get(username=local)
-        except User.DoesNotExist:
-            pass
- 
-        # 2. Full UPN → username (handles users created by django-microsoft-auth)
-        if "@" in username:
+        is_standard = isinstance(User(), AbstractBaseUser)
+    
+        if is_standard:
+            # Standard Django User — usernames are typically stored exactly as
+            # the identity provider returns them, so try exact match first.
+    
+            # 1. Full UPN → username
             try:
                 return User.objects.get(username=username)
             except User.DoesNotExist:
                 pass
- 
-        # 3. Full UPN → email (last resort fallback)
-        if "@" in username:
+    
+            # 2. Full UPN → email
+            if "@" in username:
+                try:
+                    return User.objects.get(email=username)
+                except User.DoesNotExist:
+                    pass
+    
+        else:
+            # Custom models.Model User — may have mixed username formats from
+            # legacy auth systems, so try local part first.
+    
+            # 1. Local part → username (handles legacy short-username records)
             try:
-                return User.objects.get(email=username)
+                return User.objects.get(username=local)
             except User.DoesNotExist:
                 pass
- 
+    
+            # 2. Full UPN → username (handles full UPN records)
+            if "@" in username:
+                try:
+                    return User.objects.get(username=username)
+                except User.DoesNotExist:
+                    pass
+    
+            # 3. Full UPN → email (last resort)
+            if "@" in username:
+                try:
+                    return User.objects.get(email=username)
+                except User.DoesNotExist:
+                    pass
+    
         return None
 
     def _populate_user(self, user, claims: dict, graph_profile: dict) -> None:
