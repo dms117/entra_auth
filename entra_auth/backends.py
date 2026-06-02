@@ -67,8 +67,16 @@ class EntraAuthBackend:
             return None
 
     def get_user(self, user_id):
+        """
+        Retrieve a user by their primary key.
+        Only return the user if they are active.
+        """
         try:
-            return User.objects.get(pk=user_id)
+            user = User.objects.get(pk=user_id)
+            # Prevent inactive users from being authenticated
+            if not user.is_active:
+                return None
+            return user
         except User.DoesNotExist:
             return None
 
@@ -95,6 +103,7 @@ class EntraAuthBackend:
 
         # Entra returns email-style usernames — LEO may store just the local
         # part (before @) or the full UPN. Try full UPN first, then local part.
+        # _find_user only returns active users.
         user = self._find_user(username)
 
         # --- Fetch richer profile from Graph ---
@@ -134,7 +143,7 @@ class EntraAuthBackend:
 
     def _find_user(self, username: str):
         """
-        Try to find an existing user, adapting the lookup strategy to the
+        Try to find an existing active user, adapting the lookup strategy to the
         User model's base class:
     
         AbstractUser / AbstractBaseUser (standard Django):
@@ -148,6 +157,8 @@ class EntraAuthBackend:
     
         The models.Model strategy is more expansive because custom user models
         often have a mixed-format username history from previous auth systems.
+        
+        Only returns users where is_active=True.
         """
         from django.contrib.auth.base_user import AbstractBaseUser
     
@@ -160,14 +171,14 @@ class EntraAuthBackend:
     
             # 1. Full UPN → username
             try:
-                return User.objects.get(username=username)
+                return User.objects.get(username=username, is_active=True)
             except User.DoesNotExist:
                 pass
     
             # 2. Full UPN → email
             if "@" in username:
                 try:
-                    return User.objects.get(email=username)
+                    return User.objects.get(email=username, is_active=True)
                 except User.DoesNotExist:
                     pass
     
@@ -177,21 +188,21 @@ class EntraAuthBackend:
     
             # 1. Local part → username (handles legacy short-username records)
             try:
-                return User.objects.get(username=local)
+                return User.objects.get(username=local, is_active=True)
             except User.DoesNotExist:
                 pass
     
             # 2. Full UPN → username (handles full UPN records)
             if "@" in username:
                 try:
-                    return User.objects.get(username=username)
+                    return User.objects.get(username=username, is_active=True)
                 except User.DoesNotExist:
                     pass
     
             # 3. Full UPN → email (last resort)
             if "@" in username:
                 try:
-                    return User.objects.get(email=username)
+                    return User.objects.get(email=username, is_active=True)
                 except User.DoesNotExist:
                     pass
     
