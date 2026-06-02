@@ -84,13 +84,13 @@ def initiate_auth_code_flow(request, *, redirect_uri: str) -> dict:
     )
     request.session["_entra_auth_flow"] = flow
     request.session.save()  # force save immediately
-    log.warning("DEBUG initiate: session key=%s flow keys=%s", request.session.session_key, list(flow.keys()))
+    #log.warning("DEBUG initiate: session key=%s flow keys=%s", request.session.session_key, list(flow.keys()))
     return flow
 
 
 def acquire_token_by_auth_code_flow(request, *, auth_response: dict) -> dict:
     flow = request.session.get("_entra_auth_flow", {})
-    log.warning("DEBUG callback: session key=%s flow found=%s", request.session.session_key, bool(flow))
+    #log.warning("DEBUG callback: session key=%s flow found=%s", request.session.session_key, bool(flow))
     app = build_msal_app(request)
     result = app.acquire_token_by_auth_code_flow(
         auth_code_flow=flow,
