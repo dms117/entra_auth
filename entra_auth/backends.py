@@ -106,6 +106,17 @@ class EntraAuthBackend:
         # _find_user only returns active users.
         user = self._find_user(username)
 
+        # If no active user found, check if an inactive user exists before
+        # attempting to create a new one (prevents duplicate key violations).
+        if user is None:
+            inactive_user = self._find_user_ignore_active(username)
+            if inactive_user is not None:
+                log.warning(
+                    "User %r exists but is inactive; denying authentication",
+                    username
+                )
+                return None
+
         # --- Fetch richer profile from Graph ---
         try:
             graph_profile = get_me(
@@ -203,6 +214,54 @@ class EntraAuthBackend:
             if "@" in username:
                 try:
                     return User.objects.get(email=username, is_active=True)
+                except User.DoesNotExist:
+                    pass
+    
+        return None
+
+    def _find_user_ignore_active(self, username: str):
+        """
+        Same logic as _find_user but ignores the is_active flag.
+        Used to check if an inactive user exists before attempting to create
+        a new user (prevents duplicate key violations).
+        """
+        from django.contrib.auth.base_user import AbstractBaseUser
+    
+        local = username.split("@")[0] if "@" in username else username
+        is_standard = issubclass(User, AbstractBaseUser)
+    
+        if is_standard:
+            # 1. Full UPN → username
+            try:
+                return User.objects.get(username=username)
+            except User.DoesNotExist:
+                pass
+    
+            # 2. Full UPN → email
+            if "@" in username:
+                try:
+                    return User.objects.get(email=username)
+                except User.DoesNotExist:
+                    pass
+    
+        else:
+            # 1. Local part → username (handles legacy short-username records)
+            try:
+                return User.objects.get(username=local)
+            except User.DoesNotExist:
+                pass
+    
+            # 2. Full UPN → username (handles full UPN records)
+            if "@" in username:
+                try:
+                    return User.objects.get(username=username)
+                except User.DoesNotExist:
+                    pass
+    
+            # 3. Full UPN → email (last resort)
+            if "@" in username:
+                try:
+                    return User.objects.get(email=username)
                 except User.DoesNotExist:
                     pass
     
