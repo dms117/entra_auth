@@ -4,14 +4,16 @@ entra_auth.middleware
 Optional middleware that enforces authentication on every URL unless the URL
 is explicitly exempted.
 
-Usage — add **after** SessionMiddleware and AuthenticationMiddleware:
+Usage — add **after** SessionMiddleware, AuthenticationMiddleware, and 
+EntraTokenRefreshMiddleware:
 
     MIDDLEWARE = [
         "django.middleware.security.SecurityMiddleware",
         "django.contrib.sessions.middleware.SessionMiddleware",
         ...
         "django.contrib.auth.middleware.AuthenticationMiddleware",
-        "entra_auth.middleware.EntraLoginRequiredMiddleware",  # ← add here
+        "entra_auth.token_refresh_middleware.EntraTokenRefreshMiddleware",  # ← add first
+        "entra_auth.middleware.EntraLoginRequiredMiddleware",  # ← then this
     ]
 
 Exempted URLs:

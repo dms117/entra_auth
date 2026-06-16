@@ -46,8 +46,11 @@ Settings are read from a single dict in your Django settings:
         # Map Entra group object-IDs/names → Django group names
         # e.g. {"aad-group-oid": "django-group-name"}
 
-        "TOKEN_CACHE_TIMEOUT": 3600,
-        # Seconds to keep the serialised MSAL token cache in the Django session
+        "TOKEN_CACHE_TIMEOUT": 7776000,
+        # Seconds to keep the session alive. Default 90 days (matches typical
+        # refresh token lifetime). Access tokens expire after 1 hour but are
+        # automatically refreshed by EntraTokenRefreshMiddleware using the
+        # refresh token stored in the MSAL cache.
 
         "EXEMPT_URLS": [],
         # Extra URL patterns exempt from the require-login middleware
@@ -60,6 +63,21 @@ Settings are read from a single dict in your Django settings:
         # proceed with the normal LOGIN_REDIRECT_URL redirect.
         # Example: "myapp.views.auth.post_login_redirect"
     }
+
+Token Refresh Flow:
+-------------------
+This library implements the proper OAuth 2.0 refresh flow for long-lived sessions:
+
+1. Initial authentication returns an access_token (expires in 1 hour) and a
+   refresh_token (expires in ~90 days).
+2. EntraTokenRefreshMiddleware checks token expiry before each request.
+3. If the access token is about to expire, it's automatically refreshed using
+   the refresh token (transparent to the user).
+4. Only when the refresh token expires (~90 days) is the user forced to
+   re-authenticate.
+
+This ensures users don't lose their sessions after 1 hour while maintaining
+proper security practices.
 """
 
 from django.conf import settings
@@ -86,7 +104,7 @@ _DEFAULTS = {
     "USERNAME_FIELD": "email",
     "GROUPS_CLAIM": "groups",
     "GROUPS_MAP": {},
-    "TOKEN_CACHE_TIMEOUT": 3600,
+    "TOKEN_CACHE_TIMEOUT": 7776000,  # 90 days (matches refresh token lifetime)
     "EXEMPT_URLS": [],
     "POST_LOGIN_REDIRECT": None,
 }
